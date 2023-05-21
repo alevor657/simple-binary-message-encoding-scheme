@@ -1,8 +1,8 @@
-// 1 byte - header count
-// 2 byte => header key length
-// header key (max 1023)
-// 2 bytes => header value length
-// header value (max 1023)
+// 1st byte - header count
+// next 2 bytes => header key length
+// next header key (max 1023 bytes)
+// next 2 bytes => header value length
+// next header value (max 1023 bytes)
 // ...
 //
 // payload
@@ -12,13 +12,14 @@
 // decode length validation
 // refactors
 // use maps instead of plain objects
+// add payload size so that i can understand if data was corrupted
 // motivate
 
 class Message {
-  headers: Record<string, string>;
+  headers: Map<string, string>;
   payload: Buffer;
 
-  constructor(headers: Record<string, string>, payload: Buffer) {
+  constructor(headers: Map<string, string>, payload: Buffer) {
     this.headers = headers;
     this.payload = payload;
   }
@@ -36,44 +37,53 @@ class Codec {
     this.textEncoder = new TextEncoder();
   }
 
-  private estimateBufferSize(message: Message) {
-    let headerLength = Object.entries(message.headers).reduce(
-      (acc, [key, value]) => {
-        const keyLength =
-          this.textEncoder.encode(key).length + Codec.HEADER_LENGTH_SIZE;
-        const valueLength =
-          this.textEncoder.encode(value).length + Codec.HEADER_LENGTH_SIZE;
+  private convertToBufferMap(map: Map<string, string>): Map<Uint8Array, Uint8Array> {
+    let byteArrayMap = new Map<Uint8Array, Uint8Array>();
 
-        return acc + keyLength + valueLength;
-      },
-      0
-    );
+    for (const [key, value] of map.entries()) {
+      byteArrayMap.set(
+        this.textEncoder.encode(key),
+        this.textEncoder.encode(value)
+      );
+    }
 
-    headerLength += Codec.ENCODED_HEADER_BYTE_LENGTH;
+    return byteArrayMap
+  }
 
-    const payloadLength = message.payload.length;
+  private estimateBufferSize(payload: Buffer, headers: Map<Uint8Array, Uint8Array>) {
+    let headerLength = Codec.ENCODED_HEADER_BYTE_LENGTH;
+
+    for (const [key, value] of headers.entries()) {
+      const keyLength =
+        key.length + Codec.HEADER_LENGTH_SIZE;
+      const valueLength =
+        value.length + Codec.HEADER_LENGTH_SIZE;
+
+      headerLength += keyLength + valueLength;
+    }
+
+    const payloadLength = payload.length;
 
     return headerLength + payloadLength;
   }
 
   encode(message: Message): Buffer {
-    const buffer = Buffer.alloc(this.estimateBufferSize(message));
-    const messageHeaderEntries = Object.entries(message.headers);
+    const headersAsByteArrays = this.convertToBufferMap(message.headers)
+    const bufferSize = this.estimateBufferSize(message.payload, headersAsByteArrays);
+    const buffer = Buffer.alloc(bufferSize);
     let offset = 0;
-    const numberOfHeaders = messageHeaderEntries.length;
+    const numberOfHeaders = message.headers.size;
 
     offset = buffer.writeInt8(numberOfHeaders);
 
-    for (const [key, value] of messageHeaderEntries) {
+    for (const [key, value] of headersAsByteArrays.entries()) {
       // write key
-      const encodedKey = this.textEncoder.encode(key);
-      offset = buffer.writeInt16BE(encodedKey.length, offset);
-      offset += Buffer.from(encodedKey).copy(buffer, offset);
+      offset = buffer.writeInt16BE(key.length, offset);
+      offset += Buffer.from(key).copy(buffer, offset);
 
       // write value
-      const encodedValue = this.textEncoder.encode(value);
-      offset = buffer.writeInt16BE(encodedValue.length, offset);
-      offset += Buffer.from(encodedValue).copy(buffer, offset);
+      offset = buffer.writeInt16BE(value.length, offset);
+      offset += Buffer.from(value).copy(buffer, offset);
     }
 
     // write payload
@@ -85,25 +95,25 @@ class Codec {
   decode(buffer: Buffer): Message {
     let offset = 0;
     const headerCount = buffer.readInt8();
-    offset += 1;
-    let headers: Record<string, string> = {};
+    offset += Codec.ENCODED_HEADER_BYTE_LENGTH;
+    let headers = new Map<string, string>();
 
     for (let index = 0; index < headerCount; index++) {
       // read key
       const keyLength = buffer.readInt16BE(offset);
-      offset += 2;
+      offset += Codec.HEADER_LENGTH_SIZE;
       const key = buffer.subarray(offset, offset + keyLength).toString("ascii");
       offset += keyLength;
 
       //read value
       const valueLength = buffer.readInt16BE(offset);
-      offset += 2;
+      offset += Codec.HEADER_LENGTH_SIZE;
       const value = buffer
         .subarray(offset, offset + valueLength)
         .toString("ascii");
       offset += valueLength;
 
-      headers[key] = value;
+      headers.set(key, value);
     }
 
     return new Message(headers, buffer.subarray(offset));
@@ -112,7 +122,15 @@ class Codec {
 
 const codec = new Codec();
 
-const encoded = codec.encode(new Message({ a: "", b: "" }, Buffer.from("")));
+const encoded = codec.encode(
+  new Message(
+    new Map([
+      ["a", "a"],
+      ["bb", "bb"],
+    ]),
+    Buffer.from("test")
+  )
+);
 console.log("encoded", encoded);
 const decoded = codec.decode(encoded);
 console.log("decoded", decoded);
