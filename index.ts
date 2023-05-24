@@ -15,6 +15,11 @@
 // add payload size so that i can understand if data was corrupted
 // motivate
 
+class HeaderNumberExceededError extends Error {}
+class HeaderKeySizeExceededError extends Error {}
+class HeaderValueSizeExceededError extends Error {}
+class PayloadSizeExceededError extends Error {}
+
 class Message {
   headers: Map<string, string>;
   payload: Buffer;
@@ -32,44 +37,74 @@ class Codec {
   static HEADER_LENGTH_SIZE = 2;
   // Size of header count in bytes
   static ENCODED_HEADER_BYTE_LENGTH = 1;
+  // Max header key and value length in bytes
+  static HEADER_KV_LENGTH = 1023;
+  static MAX_NUMBER_OF_HEADERS = 63;
+  // in bytes
+  static MAX_PAYLOAD_SIZE = 256 * 1024;
 
   constructor() {
     this.textEncoder = new TextEncoder();
   }
 
-  private convertToBufferMap(map: Map<string, string>): Map<Uint8Array, Uint8Array> {
+  private convertToBufferMap(
+    map: Map<string, string>
+  ): Map<Uint8Array, Uint8Array> {
+    if (map.size > Codec.MAX_NUMBER_OF_HEADERS)
+      throw new HeaderNumberExceededError(
+        `Header limit exceeded, number of passed headers: ${map.size}, max number of headers: ${Codec.MAX_NUMBER_OF_HEADERS}`
+      );
+
     let byteArrayMap = new Map<Uint8Array, Uint8Array>();
 
     for (const [key, value] of map.entries()) {
-      byteArrayMap.set(
-        this.textEncoder.encode(key),
-        this.textEncoder.encode(value)
-      );
+      const encodedKey = this.textEncoder.encode(key);
+      const encodedValue = this.textEncoder.encode(value);
+
+      if (encodedKey.length > Codec.HEADER_KV_LENGTH)
+        throw new HeaderKeySizeExceededError(
+          `Header key size exceeded, max key size is ${Codec.HEADER_KV_LENGTH}`
+        );
+
+      if (encodedValue.length > Codec.HEADER_KV_LENGTH)
+        throw new HeaderValueSizeExceededError(
+          `Header value size exceeded, max value size is ${Codec.HEADER_KV_LENGTH}`
+        );
+
+      byteArrayMap.set(encodedKey, encodedValue);
     }
 
-    return byteArrayMap
+    return byteArrayMap;
   }
 
-  private estimateBufferSize(payload: Buffer, headers: Map<Uint8Array, Uint8Array>) {
+  private estimateBufferSize(
+    payload: Buffer,
+    headers: Map<Uint8Array, Uint8Array>
+  ) {
+    const payloadLength = payload.length;
     let headerLength = Codec.ENCODED_HEADER_BYTE_LENGTH;
 
+    if (payloadLength > Codec.MAX_PAYLOAD_SIZE)
+      throw new PayloadSizeExceededError(
+        `Payload size exceeded, max payload size is ${Codec.MAX_PAYLOAD_SIZE}`
+      );
+
     for (const [key, value] of headers.entries()) {
-      const keyLength =
-        key.length + Codec.HEADER_LENGTH_SIZE;
-      const valueLength =
-        value.length + Codec.HEADER_LENGTH_SIZE;
+      const keyLength = key.length + Codec.HEADER_LENGTH_SIZE;
+      const valueLength = value.length + Codec.HEADER_LENGTH_SIZE;
 
       headerLength += keyLength + valueLength;
     }
-
-    const payloadLength = payload.length;
 
     return headerLength + payloadLength;
   }
 
   encode(message: Message): Buffer {
-    const headersAsByteArrays = this.convertToBufferMap(message.headers)
-    const bufferSize = this.estimateBufferSize(message.payload, headersAsByteArrays);
+    const headersAsByteArrays = this.convertToBufferMap(message.headers);
+    const bufferSize = this.estimateBufferSize(
+      message.payload,
+      headersAsByteArrays
+    );
     const buffer = Buffer.alloc(bufferSize);
     let offset = 0;
     const numberOfHeaders = message.headers.size;
