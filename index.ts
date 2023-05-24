@@ -1,20 +1,3 @@
-// 1st byte - header count
-// next 2 bytes => header key length
-// next header key (max 1023 bytes)
-// next 2 bytes => header value length
-// next header value (max 1023 bytes)
-// ...
-//
-// payload
-// 256 * 1024 kb
-//
-// encode length validation
-// decode length validation
-// refactors
-// use maps instead of plain objects
-// add payload size so that i can understand if data was corrupted
-// motivate
-
 class HeaderNumberExceededError extends Error {}
 class HeaderKeySizeExceededError extends Error {}
 class HeaderValueSizeExceededError extends Error {}
